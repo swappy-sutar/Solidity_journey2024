@@ -15,7 +15,6 @@ pragma solidity 0.8.0;
         uint public data = 10;
         bool public locked;
 
-
         constructor() {
             owner = msg.sender;
         }
