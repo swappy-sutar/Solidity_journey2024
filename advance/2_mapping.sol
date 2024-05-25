@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.0;
+pragma solidity ^0.8.0;
 
-contract mappingKeyword {
-    mapping(address => uint) myMapp;
+contract MappingKeyword {
+    mapping(uint => address) private myMapp;
 
-    function getVal(address _address) public view returns (uint) {
-        return myMapp[_address];
+    function getVal(uint _index) public view returns (address) {
+        return myMapp[_index];
     }
 
     function setVal(uint _index, address _addr) public {
-        myMapp[_addr] = _index;
+        myMapp[_index] = _addr;
     }
 
-    function removeMappi(address _addr) public returns (string memory, uint) {
-        uint value = myMapp[_addr];
-        require(value != 0, "Address not found");
-        delete myMapp[_addr];
+    function removeMappi(uint _index) public returns (string memory, address) {
+        address value = myMapp[_index];
+        require(value != address(0), "Index number not found");
+        delete myMapp[_index];
         return ("Deleted successfully", value);
     }
 }
