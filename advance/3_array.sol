@@ -26,6 +26,13 @@ pragma solidity ^0.8.0;
             //it resets the value at index to default value == 0.
             delete arr1[index];
         }
+        
+        function replaceAndShiftingLastEle(uint _index)public {
+            //when we deleting index value but it default store 0 and this function remove the 0
+            arr1[_index] = arr1[arr1.length - 1];
+
+            arr1.pop();
+        }
 
         function examples() external pure {
             uint[] memory a = new uint[](5);
