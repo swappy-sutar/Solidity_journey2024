@@ -26,7 +26,7 @@ contract EmployeeDetails {
 
     mapping (uint => Employee) private empMapp;
 
-    event EmployeeAdded(uint employeeId, string name);
+    event EmployeeAdded(uint employeeId, string name,string message);
     event SalaryHiked(uint employeeId, uint256 oldSalary, uint256 newSalary, uint256 percentage);
 
     modifier onlyOwner() {
@@ -41,7 +41,7 @@ contract EmployeeDetails {
         empMapp[employeeId] = Employee(_name,_salary,block.timestamp,_designation,_yearOfExperience);
         employeeIds.push(employeeId);
 
-        emit EmployeeAdded(employeeId, _name);
+        emit EmployeeAdded(employeeId, _name , "Details added successfully");
     }
 
     function getEmployeeDetails(uint employeeId) public view returns (string memory name,uint256 salary,uint256 joiningDate,string memory designation,uint256 yearOfExperience) {
