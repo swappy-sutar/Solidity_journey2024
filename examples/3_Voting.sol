@@ -36,7 +36,6 @@ contract Voting {
     }
 
     function addProposal(string memory _proposal) public onlyOwner {
-
         proposals.push(Proposal({
             name: _proposal,
             voteCount: 0
