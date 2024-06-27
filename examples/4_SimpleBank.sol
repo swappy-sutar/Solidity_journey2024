@@ -39,7 +39,10 @@ pragma solidity 0.8.0;
         require(accountExists[_address], "account not found");
         newAccount memory Account = accounts[_address];
         return (Account.name, Account.dob, Account.sex, Account.location);
-    
+   }
+
+   function BankBalance()public view returns (uint){
+        return address(this).balance;
    }
 
     function getBalance(address _accountAddress)public view returns(uint){
@@ -57,7 +60,6 @@ pragma solidity 0.8.0;
     function withdraw(uint256 _amount) public {
         require(_amount <= balances[msg.sender], "Insufficient balance");
         require(_amount > 0, "Withdrawal amount must be greater than zero"); 
-
         balances[msg.sender] -= _amount;
         payable(msg.sender).transfer(_amount); //amount send form of Wei 1000000000000000000
     }
