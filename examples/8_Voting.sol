@@ -1,13 +1,19 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-contract VotingEVM {
+import "@openzeppelin/contracts/security/Pausable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
-    address public electionCommission;
+contract VotingEVM is Pausable, ReentrancyGuard {
+
+    address public immutable electionCommission;
 
     constructor() {
         electionCommission = msg.sender;
     }
+
+    enum VotingStatus { NotStarted, InProgress, Ended, VotingStopped }
+    enum Gender { NotSpecified, Male, Female, Other }
 
     struct Voter {
         string name;
@@ -43,26 +49,30 @@ contract VotingEVM {
     address[] private voterList;
     address[] private candidateList;
 
-    enum VotingStatus { NotStarted, InProgress, Ended }
-    enum Gender { NotSpecified, Male, Female, Other }
+    event VoterRegistered(address indexed voterAddress, uint voterId);
+    event CandidateRegistered(address indexed candidateAddress, uint candidateId);
+    event VotingPeriodSet(uint startTime, uint endTime);
+    event VoteSuccessful(address indexed voterAddress, string message);
+    event ResultAnnounced(address indexed winner, string name, uint votes);
 
-    modifier isVotingOver() {
+    modifier votingNotOver() {
         require(block.timestamp <= endTime && !stopVoting, "Voting is over");
         _;
     }
 
     modifier onlyCommissioner() {
-        require(msg.sender == electionCommission, "You don't have permission to perform this task");
+        require(msg.sender == electionCommission, "Permission denied: Not election commissioner");
         _;
     }
 
-    modifier checkAge(uint _age) {
-        require(_age >= 18, "Your age is below 18");
+    modifier validAge(uint _age) {
+        require(_age >= 18, "Age must be at least 18");
         _;
     }
 
-    function registerVoter(string calldata _name, uint _age, Gender _gender) external checkAge(_age) {
-        require(!voterExist[msg.sender], "You are already registered");
+    function registerVoter(string calldata _name, uint _age, Gender _gender) external validAge(_age) whenNotPaused {
+        require(!voterExist[msg.sender], "Voter already registered");
+        require(bytes(_name).length > 0, "Name cannot be empty");
 
         voterDetails[nextVoterId] = Voter({
             name: _name,
@@ -76,6 +86,7 @@ contract VotingEVM {
         voterExist[msg.sender] = true;
         voterList.push(msg.sender);
 
+        emit VoterRegistered(msg.sender, nextVoterId);
         nextVoterId++;
     }
 
@@ -83,9 +94,11 @@ contract VotingEVM {
         return voterDetails[_voterID];
     }
 
-    function registerCandidate(string calldata _name, string calldata _party, uint _age, Gender _gender) external checkAge(_age) {
-        require(!candidateExist[msg.sender], "Candidate is already registered");
-        require(msg.sender != electionCommission, "You are from election Commission so don't have access");
+    function registerCandidate(string calldata _name, string calldata _party, uint _age, Gender _gender) external validAge(_age) whenNotPaused {
+        require(!candidateExist[msg.sender], "Candidate already registered");
+        require(msg.sender != electionCommission, "Election commissioner cannot be a candidate");
+        require(bytes(_name).length > 0, "Name cannot be empty");
+        require(bytes(_party).length > 0, "Party cannot be empty");
 
         candidateDetails[nextCandidateId] = Candidate({
             name: _name,
@@ -99,6 +112,8 @@ contract VotingEVM {
 
         candidateExist[msg.sender] = true;
         candidateList.push(msg.sender);
+        
+        emit CandidateRegistered(msg.sender, nextCandidateId);
         nextCandidateId++;
     }
 
@@ -110,50 +125,74 @@ contract VotingEVM {
         return voterList;
     }
 
-    function emergencyStopVoting() public onlyCommissioner {
+    function emergencyStopVoting() public onlyCommissioner whenNotPaused {
         stopVoting = true;
     }
 
-    function setVotingPeriod(uint _startTime, uint _endTime) external onlyCommissioner {
-        // require(_startTime < 3600,"endTime must be greater than 1 hour");
+    function setVotingPeriod(uint _startTime, uint _endTime) external onlyCommissioner whenNotPaused {
+        require(_endTime > _startTime, "End time must be greater than start time");
         startTime = block.timestamp + _startTime;
-        endTime = _startTime + _endTime;
+        endTime = startTime + _endTime;
+        emit VotingPeriodSet(startTime, endTime);
     }
 
-    function getVotingStatus() public view returns (string memory) {
+    function getVotingStatus() public view returns (VotingStatus) {
         if (stopVoting) {
-            return "Voting has been stopped";
+            return VotingStatus.VotingStopped;
         } else if (block.timestamp < startTime) {
-            return "Not Started";
+            return VotingStatus.NotStarted;
         } else if (block.timestamp >= startTime && block.timestamp <= endTime) {
-            return "In Progress";
+            return VotingStatus.InProgress;
         } else {
-            return "Ended";
+            return VotingStatus.Ended;
         }
     }
 
-    function Vote(uint _voterId, uint _candidateId) external isVotingOver{
-        require(voterDetails[_voterId].voteCandidateId == 0, "You have already voted");
-        require(voterDetails[_voterId].voterAddress == msg.sender, "You are not authorized to vote with this ID");
-        require(candidateDetails[_candidateId].candidateAddress != address(0), "Candidate not found");
+    function vote(uint _voterId, uint _candidateId) external votingNotOver nonReentrant whenNotPaused {
+        Voter storage voter = voterDetails[_voterId];
+        Candidate storage candidate = candidateDetails[_candidateId];
 
-        voterDetails[_voterId].voteCandidateId = _candidateId;
-        candidateDetails[_candidateId].votes++;
+        require(voter.voteCandidateId == 0, "You have already voted");
+        require(voter.voterAddress == msg.sender, "Unauthorized voter");
+        require(candidate.candidateAddress != address(0), "Candidate not found");
+
+        voter.voteCandidateId = _candidateId;
+        candidate.votes++;
+
+        emit VoteSuccessful(voter.voterAddress, "Vote added successfully");
     }
 
-    function announceResult() external isVotingOver onlyCommissioner returns (uint,address) {
+    function announceResult() external onlyCommissioner whenNotPaused {
+        require(getVotingStatus() == VotingStatus.Ended, "Voting is not ended yet");
+
         uint winningVoteCount = 0;
-        address winningCandidateAddress;
+        uint winningCandidateId;
 
         for (uint i = 1; i < nextCandidateId; i++) {
             if (candidateDetails[i].votes > winningVoteCount) {
                 winningVoteCount = candidateDetails[i].votes;
-                winningCandidateAddress = candidateDetails[i].candidateAddress;
+                winningCandidateId = i;
             }
         }
 
-        winner = winningCandidateAddress;
-        return (winningVoteCount,winner);
+        winner = candidateDetails[winningCandidateId].candidateAddress;
+        emit ResultAnnounced(winner, candidateDetails[winningCandidateId].name, winningVoteCount);
     }
 
+    function resetElection() external onlyCommissioner {
+        for (uint i = 1; i < nextVoterId; i++) {
+            delete voterDetails[i];
+        }
+        for (uint i = 1; i < nextCandidateId; i++) {
+            delete candidateDetails[i];
+        }
+        delete voterList;
+        delete candidateList;
+        nextVoterId = 1;
+        nextCandidateId = 1;
+        startTime = 0;
+        endTime = 0;
+        stopVoting = false;
+        winner = address(0);
+    }
 }
