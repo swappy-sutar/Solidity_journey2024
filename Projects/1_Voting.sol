@@ -5,8 +5,8 @@ import "@openzeppelin/contracts/security/Pausable.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
 contract VotingEVM is Pausable, ReentrancyGuard {
-
     address public immutable electionCommission;
+    uint256 public constant candidateDeposit = 0.0001 ether;
 
     constructor() {
         electionCommission = msg.sender;
@@ -17,46 +17,46 @@ contract VotingEVM is Pausable, ReentrancyGuard {
 
     struct Voter {
         string name;
-        uint age;
-        uint voterId;
+        uint8 age;
+        uint256 voterId;
         Gender gender;
-        uint voteCandidateId;
-        address voterAddress;
+        uint256 voteCandidateId;
     }
 
     struct Candidate {
         string name;
         string party;
-        uint age;
+        uint8 age;
         Gender gender;
-        uint candidateId;
-        address candidateAddress;
-        uint votes;
+        uint256 candidateId;
+        uint256 votes;
+        uint256 deposit;
     }
 
     address public winner;
-    uint private nextVoterId = 1;
-    uint private nextCandidateId = 1;
-    uint private startTime = 0;
-    uint private endTime = 0;
+    uint256 private nextVoterId = 1;
+    uint256 private nextCandidateId = 1;
+    uint256 private startTime = 0;
+    uint256 private endTime = 0;
     bool private stopVoting;
 
-    mapping(uint => Voter) private voterDetails;
+    mapping(address => Voter) private voterDetails;
     mapping(address => bool) private voterExist;
-    mapping(uint => Candidate) private candidateDetails;
+    mapping(address => Candidate) private candidateDetails;
     mapping(address => bool) private candidateExist;
 
     address[] private voterList;
     address[] private candidateList;
 
-    event VoterRegistered(address indexed voterAddress, uint voterId);
-    event CandidateRegistered(address indexed candidateAddress, uint candidateId);
-    event VotingPeriodSet(uint startTime, uint endTime);
-    event VoteSuccessful(address indexed voterAddress, string message);
-    event ResultAnnounced(address indexed winner, string name, uint votes);
+    event VoterRegistered(address indexed voterAddress, uint256 voterId);
+    event CandidateRegistered(address indexed candidateAddress, uint256 candidateId);
+    event VotingPeriodSet(uint256 startTime, uint256 endTime);
+    event VoteSuccessful(address indexed voterAddress, string candidateName);
+    event ResultAnnounced(address indexed winner, string name, uint256 votes);
+    event DepositRefunded(address indexed candidate, uint256 amount);
 
     modifier votingNotOver() {
-        require(block.timestamp <= endTime && !stopVoting, "Voting is over");
+        require(block.timestamp <= endTime && !stopVoting, "Voting is over or stopped");
         _;
     }
 
@@ -65,22 +65,29 @@ contract VotingEVM is Pausable, ReentrancyGuard {
         _;
     }
 
-    modifier validAge(uint _age) {
+    modifier validAge(uint256 _age) {
         require(_age >= 18, "Age must be at least 18");
         _;
     }
 
-    function registerVoter(string calldata _name, uint _age, Gender _gender) external validAge(_age) whenNotPaused {
+    receive() external payable {}
+
+    function transferETH(address payable _address, uint256 _amount) external onlyCommissioner {
+        require(address(this).balance >= _amount, "Insufficient contract balance");
+        (bool success, ) = _address.call{value: _amount}("");
+        require(success, "Transfer failed");
+    }
+
+    function registerVoter(string calldata _name, uint256 _age, Gender _gender) external validAge(_age) whenNotPaused {
         require(!voterExist[msg.sender], "Voter already registered");
         require(bytes(_name).length > 0, "Name cannot be empty");
 
-        voterDetails[nextVoterId] = Voter({
+        voterDetails[msg.sender] = Voter({
             name: _name,
-            age: _age,
+            age: uint8(_age),
             voterId: nextVoterId,
             gender: _gender,
-            voteCandidateId: 0,
-            voterAddress: msg.sender
+            voteCandidateId: 0
         });
 
         voterExist[msg.sender] = true;
@@ -90,31 +97,38 @@ contract VotingEVM is Pausable, ReentrancyGuard {
         nextVoterId++;
     }
 
-    function getVoterDetails(uint _voterID) public view returns (Voter memory) {
-        return voterDetails[_voterID];
+    function getVoter(address _voterAddress) public view returns (string memory name, uint256 age, Gender gender) {
+        Voter memory voter = voterDetails[_voterAddress];
+        return (voter.name, voter.age, voter.gender);
     }
 
-    function registerCandidate(string calldata _name, string calldata _party, uint _age, Gender _gender) external validAge(_age) whenNotPaused {
+    function registerCandidate(string calldata _name, string calldata _party, uint256 _age, Gender _gender) external payable validAge(_age) whenNotPaused {
         require(!candidateExist[msg.sender], "Candidate already registered");
         require(msg.sender != electionCommission, "Election commissioner cannot be a candidate");
         require(bytes(_name).length > 0, "Name cannot be empty");
         require(bytes(_party).length > 0, "Party cannot be empty");
+        require(msg.value == candidateDeposit, "Deposit amount must be 0.0001 ETH");
 
-        candidateDetails[nextCandidateId] = Candidate({
+        candidateDetails[msg.sender] = Candidate({
             name: _name,
             party: _party,
-            age: _age,
+            age: uint8(_age),
             gender: _gender,
             candidateId: nextCandidateId,
-            candidateAddress: msg.sender,
-            votes: 0
+            votes: 0,
+            deposit: msg.value
         });
 
         candidateExist[msg.sender] = true;
         candidateList.push(msg.sender);
-        
+
         emit CandidateRegistered(msg.sender, nextCandidateId);
         nextCandidateId++;
+    }
+
+    function getCandidate(address _candidateAddress) public view returns (string memory name, string memory party, uint256 age, Gender gender) {
+        Candidate memory candidate = candidateDetails[_candidateAddress];
+        return (candidate.name, candidate.party, candidate.age, candidate.gender);
     }
 
     function getCandidateList() public view returns (address[] memory) {
@@ -126,14 +140,22 @@ contract VotingEVM is Pausable, ReentrancyGuard {
     }
 
     function emergencyStopVoting() public onlyCommissioner whenNotPaused {
+        require(block.timestamp >= startTime, "Voting has not started yet");
         stopVoting = true;
     }
 
-    function setVotingPeriod(uint _startTime, uint _endTime) external onlyCommissioner whenNotPaused {
+    function setVotingPeriod(uint256 _startTime, uint256 _endTime) external onlyCommissioner whenNotPaused {
         require(_endTime > _startTime, "End time must be greater than start time");
-        startTime = block.timestamp + _startTime;
-        endTime = startTime + _endTime;
-        emit VotingPeriodSet(startTime, endTime);
+        require(getVotingStatus() != VotingStatus.InProgress, "Cannot set period during active voting");
+
+        startTime = _startTime;
+        endTime = _endTime;
+
+        emit VotingPeriodSet(_startTime, _endTime);
+    }
+
+    function getVotingTimePeriod() external view returns (uint256, uint256) {
+        return (startTime, endTime);
     }
 
     function getVotingStatus() public view returns (VotingStatus) {
@@ -148,44 +170,57 @@ contract VotingEVM is Pausable, ReentrancyGuard {
         }
     }
 
-    function vote(uint _voterId, uint _candidateId) external votingNotOver nonReentrant whenNotPaused {
-        Voter storage voter = voterDetails[_voterId];
-        Candidate storage candidate = candidateDetails[_candidateId];
+    function vote(address _candidateAddress) external votingNotOver nonReentrant whenNotPaused {
+        require(voterExist[msg.sender], "You are not registered to vote");
+        require(voterDetails[msg.sender].voteCandidateId == 0, "You have already voted");
+        require(candidateExist[_candidateAddress], "Candidate not found");
 
-        require(voter.voteCandidateId == 0, "You have already voted");
-        require(voter.voterAddress == msg.sender, "Unauthorized voter");
-        require(candidate.candidateAddress != address(0), "Candidate not found");
+        Voter storage voter = voterDetails[msg.sender];
+        voter.voteCandidateId = candidateDetails[_candidateAddress].candidateId;
 
-        voter.voteCandidateId = _candidateId;
-        candidate.votes++;
+        candidateDetails[_candidateAddress].votes++;
 
-        emit VoteSuccessful(voter.voterAddress, "Vote added successfully");
+        emit VoteSuccessful(msg.sender, candidateDetails[_candidateAddress].name);
     }
 
     function announceResult() external onlyCommissioner whenNotPaused {
-        require(getVotingStatus() == VotingStatus.Ended, "Voting is not ended yet");
+        require(getVotingStatus() == VotingStatus.Ended, "Voting has not ended yet");
 
-        uint winningVoteCount = 0;
-        uint winningCandidateId;
+        address winningCandidate;
+        uint256 winningVoteCount = 0;
 
-        for (uint i = 1; i < nextCandidateId; i++) {
-            if (candidateDetails[i].votes > winningVoteCount) {
-                winningVoteCount = candidateDetails[i].votes;
-                winningCandidateId = i;
+        for (uint256 i = 0; i < candidateList.length; i++) {
+            address candidateAddr = candidateList[i];
+            uint256 candidateVotes = candidateDetails[candidateAddr].votes;
+            if (candidateVotes > winningVoteCount) {
+                winningVoteCount = candidateVotes;
+                winningCandidate = candidateAddr;
             }
         }
 
-        winner = candidateDetails[winningCandidateId].candidateAddress;
-        emit ResultAnnounced(winner, candidateDetails[winningCandidateId].name, winningVoteCount);
+        require(winningVoteCount > 0, "No votes were cast");
+
+        winner = winningCandidate;
+        emit ResultAnnounced(winner, candidateDetails[winner].name, winningVoteCount);
+    }
+
+    function refundDeposit(address _candidate) external onlyCommissioner {
+        require(candidateExist[_candidate], "Candidate does not exist");
+        require(address(this).balance > 0, "No balance available for refund");
+        require(getVotingStatus() == VotingStatus.Ended, "Voting not ended yet");
+
+        Candidate memory candidate = candidateDetails[_candidate];
+
+        // Transfer the deposit back to the candidate
+        (bool success, ) = payable(_candidate).call{value: candidate.deposit}("");
+        require(success, "Refund failed");
+
+        emit DepositRefunded(_candidate, candidate.deposit);
     }
 
     function resetElection() external onlyCommissioner {
-        for (uint i = 1; i < nextVoterId; i++) {
-            delete voterDetails[i];
-        }
-        for (uint i = 1; i < nextCandidateId; i++) {
-            delete candidateDetails[i];
-        }
+        require(getVotingStatus() == VotingStatus.Ended, "Election not ended yet");
+
         delete voterList;
         delete candidateList;
         nextVoterId = 1;
